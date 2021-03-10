@@ -32,27 +32,27 @@ def cuda_corr(res_c, dft, ml, max_lag, n):
     if x >= y:
         return
     mll = ml[ts]
-    for l in range(-mll, mll+1):
+    for lag in range(-mll, mll+1):
         tmp = 0.0
         for t in range(dft.shape[2]):
-            if t + l < 0 or t + l >= dft.shape[2]:
+            if t + lag < 0 or t + lag >= dft.shape[2]:
                 continue
             else:
-                tmp = tmp + dft[ts, x, t + l] * dft[ts, y, t] # + - change
-        tmp = tmp / (dft.shape[2] - abs(l))
-        idx = l + max_lag  
+                tmp = tmp + dft[ts, x, t + lag] * dft[ts, y, t] # + - change
+        tmp = tmp / (dft.shape[2] - abs(lag))
+        idx = lag + max_lag
         res_c[ts, x, y, idx] = tmp
     return
 
-def cross_corr(dft_c, bin_lags, m_lag, n, dev_id=None):
+
+def cross_corr(array, bin_lags, m_lag, n, dev_id=None):
     """
     Umbrella function for cuda based correlation analysis on pairwise level.
     Calculates the cuda-gird and parses every necessary array to GPU.
-    
 
     Parameters
     ----------
-    dft_c : numpy array 3-D
+    array : numpy array 3-D
         Moving average filtered data.
     bin_lags : numpy aaray 1-D
         diffrent lags for diffrent timescales
@@ -74,19 +74,17 @@ def cross_corr(dft_c, bin_lags, m_lag, n, dev_id=None):
 
     """
     
-    if dev_id is not None:
+    if dev_id:
         cuda.select_device(dev_id)
-    tpb = 4
-    ts, n, T = dft_c.shape
+    THREADS_PER_BLOCK = (4, 4, 4)
+    ts, n, T = array.shape
     res = np.zeros((ts, n, n, 2*m_lag+1))
-    
-    
-    threadsperblock = (tpb, tpb, tpb)
-    blockspergrid_x = int(math.ceil(ts / threadsperblock[0]))
-    blockspergrid_y = int(math.ceil(n / threadsperblock[1]))
-    blockspergrid_z = int(math.ceil(n / threadsperblock[2]))
+
+    blockspergrid_x = int(math.ceil(ts / THREADS_PER_BLOCK[0]))
+    blockspergrid_y = int(math.ceil(n / THREADS_PER_BLOCK[1]))
+    blockspergrid_z = int(math.ceil(n / THREADS_PER_BLOCK[2]))
     blockspergrid = (blockspergrid_x, blockspergrid_y, blockspergrid_z)
     
-    cuda_corr[blockspergrid, threadsperblock](res, dft_c, bin_lags, m_lag, n)
+    cuda_corr[blockspergrid, THREADS_PER_BLOCK](res, array, bin_lags, m_lag, n)
     
     return res
