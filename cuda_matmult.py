@@ -1,13 +1,26 @@
 from numba import cuda, float32
 import numpy as np
-import math
+import time
+
+from gpu_utils import *
 
 # Controls threads per block and shared memory usage.
 # The computation will be done on blocks of TPBxTPB elements.
 N_THREADS = 16
 
+@cuda.jit('void(float32[:,:], float32[:,:], float32[:,:])')
+def matmul(A, B, C):
+    """Perform square matrix multiplication of C = A * B
+    """
+    i, j = cuda.grid(2)
+    if i < C.shape[0] and j < C.shape[1]:
+        tmp = 0.
+        for k in range(A.shape[1]):
+            tmp += A[i, k] * B[k, j]
+        C[i, j] = tmp
 
-@cuda.jit()
+
+@cuda.jit('void(float32[:,:], float32[:,:], float32[:,:])')
 def fast_matmul(A, B, C):
     # Define an array in the shared memory
     # The size and type of the arrays must be known at compile time
@@ -29,6 +42,8 @@ def fast_matmul(A, B, C):
     tmp = 0.
     for i in range(bpg):
         # Preload data into shared memory
+        if (ty + i * N_THREADS >= A.shape[1] or tx + i * N_THREADS >= B.shape[0]):
+            continue
         sA[tx, ty] = A[x, ty + i * N_THREADS]
         sB[tx, ty] = B[tx + i * N_THREADS, y]
 
@@ -45,25 +60,34 @@ def fast_matmul(A, B, C):
     C[x, y] = tmp
 
 
-if __name__ == "__main__":
-
+def main():
     if not cuda.is_available():
         print("Cuda is not available on this machine.")
         exit()
+    # print_debug_info()
 
-    MATRIX_SIZE = 1000
+    MATRIX_SIZE = 10000
     MATRIX_SHAPE = (MATRIX_SIZE, MATRIX_SIZE)
 
-    A = np.ones(MATRIX_SHAPE)
-    B = np.ones(MATRIX_SHAPE) * 2
-    C = np.ndarray(MATRIX_SHAPE)
+    A = np.ones(MATRIX_SHAPE, dtype=np.float32)
+    B = np.identity(MATRIX_SIZE, dtype=np.float32)
+    C = np.ndarray(MATRIX_SHAPE, dtype=np.float32)
 
     threadsperblock = (N_THREADS, N_THREADS)
-    n_blocks = int(math.ceil(MATRIX_SIZE / N_THREADS))
+    n_blocks = (MATRIX_SIZE + N_THREADS - 1) // N_THREADS
     blockspergrid = (n_blocks, n_blocks)
 
+    start = time.time()
     fast_matmul[blockspergrid, threadsperblock](A, B, C)
-    print(C)
+    end = time.time()
+    print(f"Fast matrix multiplication took {end-start} seconds")
+
+    start = time.time()
+    matmul[blockspergrid, threadsperblock](A, B, C)
+    end = time.time()
+    print(f"Naive matrix multiplication took {end-start} seconds")
 
 
+if __name__ == "__main__":
 
+    main()
