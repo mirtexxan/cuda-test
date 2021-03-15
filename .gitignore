@@ -2,3 +2,4 @@ data/*
 .idea/*
 venv/*
 *.asv
+__pycache__/*

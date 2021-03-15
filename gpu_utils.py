@@ -4,7 +4,7 @@ import time
 N_THREADS = 16
 
 
-def print_debug_info():
+def print_gpu_info():
     gpu = cuda.get_current_device()
     print("name = %s" % gpu.name)
     print("maxThreadsPerBlock = %s" % str(gpu.MAX_THREADS_PER_BLOCK))
@@ -25,21 +25,21 @@ def print_debug_info():
 
 
 def timing(func):
-    def wrapper(*args):
+    def wrapper(*args, **kwargs):
         if "kernel" in func.__name__:
             start = time.time()
-            func(*args)
+            func(*args, **kwargs)
             end = time.time()
             print(f"Kernel took {end - start} seconds (including compilation)")
             start = time.time()
-            func(*args)
+            func(*args, **kwargs)
             end = time.time()
             print(f"Kernel took {end - start} seconds (excluding compilation)")
         else:
             start = time.time()
-            func(*args)
+            func(*args, **kwargs)
             end = time.time()
-            print(f"Host function took {end - start} seconds")
+            print(f"Function {func.__name__} took {end - start} seconds")
     return wrapper
 
 
@@ -96,3 +96,19 @@ def fast_matmul(A, B, C):
         cuda.syncthreads()
     if x < C.shape[0] and y < C.shape[1]:
         C[x, y] = tmp
+
+
+@cuda.jit('float32[:,:], float32[:,:], int32, int32')
+def cuda_shift(array, array_shifted, shift, n_threads):
+    # Computational blocks are unused. Each thread is assigned a single row in the matrix.
+    tid = cuda.threadIdx.x
+    bpg = cuda.gridDim.x
+
+    for i in range(bpg):
+        for j in range(array.shape[1]):
+            if (tid + i * n_threads) >= array.shape[0]:
+                continue
+            if (shift > 0 and j - shift < 0) or (shift < 0 and j - shift >= array.shape[1]):
+                array_shifted[tid + i * n_threads][j] = 0.0
+            else:
+                array_shifted[tid + i * n_threads][j] = array[tid][j - shift]
