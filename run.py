@@ -2,16 +2,29 @@ from numba import cuda
 import numpy as np
 import glob
 import os
+import re
 
 from gpu_utils import run_numba_kernel, fast_matmul, naive_matmul
-from cuda_correlation import cross_corr, cross_corr_opt
+from cuda_correlation import cross_corr_naive, cross_corr_opt
 
-DEBUG = False
+DEBUG = True
 
 if DEBUG:
-    PATH_PATTERN = "data/ts10.np*"
+    PATH_PATTERN = "./data/TS1*"
 else:
-    PATH_PATTERN = "data/ts1*"
+    PATH_PATTERN = "./data/*"
+
+LAGS = {"TS01": 20,
+        "TS02": 20,
+        "TS03": 41,
+        "TS04": 60,
+        "TS05": 100,
+        "TS06": 120,
+        "TS07": 80,
+        "TS08": 50,
+        "TS09": 34,
+        "TS10": 25
+        }
 
 
 def csv_to_npy(filename):
@@ -23,8 +36,10 @@ def csv_to_npy(filename):
 
 
 # TODO work in progress: here we should call correlation functions from cuda_correlation.py
-def process_array(array):
-    pass
+def process_list(list):
+    n_filters = len(list)
+    print(n_filters)
+
 
 
 def test_matmult(matrix_a=None, matrix_b=None):
@@ -34,9 +49,10 @@ def test_matmult(matrix_a=None, matrix_b=None):
 
     if not matrix_a or not matrix_b:
         rows = 63
-        cols = 42600
+        cols = 426000
         matrix_a = np.random.rand(rows, cols).astype('f')
         matrix_b = np.random.rand(cols, rows).astype('f')
+        # np.random.seed(240387)
         # matrix_a = np.ones((rows,cols), dtype=np.float32)
         # matrix_b = np.ones((cols, rows), dtype=np.float32)
     else:
@@ -55,24 +71,29 @@ def test_matmult(matrix_a=None, matrix_b=None):
     run_numba_kernel(naive_matmul, bpg, tpb, *args)
     return matrix_c
 
-def load_data(path):
-    list = []
-    for file in glob.glob(path):
-        file_extension = os.path.splitext(file)[1]
-        if file_extension == '.csv':
-            csv_to_npy(file)
+
+def load_data(path, convert_csv=False):
+    matrix_lag_list = []
+    if convert_csv:
+        for file in glob.glob(path):
+            file_extension = os.path.splitext(file)[1]
+            if file_extension == '.csv':
+                csv_to_npy(file)
     for file in glob.glob(path):
         file_extension = os.path.splitext(file)[1]
         if file_extension == '.npy':
-            array = np.load(file)
-            print(f"Array {file} has shape {np.shape(array)}")
-            list.append(array)
-    return list
+            array = np.load(file).astype('f')
+            # set any float <1e-15 to 0 (for efficiency)
+            np.around(array, decimals=15, out=array)
+            def subfunc(m):
+                return m.group(1)+m.group(2) if len(m.group(2)) == 2 else m.group(1)+"0"+m.group(2)
+            filename = re.sub(r'[a-z./]*([A-Za-z]+)([0-9]+)\.[a-z]+.', subfunc, file)
+            if DEBUG:
+                print(f"Array {file} has shape {np.shape(array)}")
+            matrix_lag_list.append((filename, array, LAGS[filename]))
+    return sorted(matrix_lag_list)
 
 
 if __name__ == "__main__":
-    np.random.seed(240387)
-    #matrix_list = load_data(PATH_PATTERN)
-    # for matrix in matrix_list:
-    #    print(np.shape(matrix))
-    test_matmult()
+    matrix_lag_list = load_data(PATH_PATTERN)
+    process_list(matrix_lag_list)
