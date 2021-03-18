@@ -3,28 +3,11 @@ import numpy as np
 import glob
 import os
 import re
+import cupy as cp
 
-from gpu_utils import run_numba_kernel, fast_matmul, naive_matmul
-from cuda_correlation import cross_corr_naive, cross_corr_opt
-
-DEBUG = True
-
-if DEBUG:
-    PATH_PATTERN = "./data/TS1*"
-else:
-    PATH_PATTERN = "./data/*"
-
-LAGS = {"TS01": 20,
-        "TS02": 20,
-        "TS03": 41,
-        "TS04": 60,
-        "TS05": 100,
-        "TS06": 120,
-        "TS07": 80,
-        "TS08": 50,
-        "TS09": 34,
-        "TS10": 25
-        }
+from legacy import run_numba_kernel, naive_matmul, N_THREADS
+from utils import timing
+from cuda_correlation import cross_correlation
 
 
 def csv_to_npy(filename):
@@ -35,14 +18,15 @@ def csv_to_npy(filename):
     return numpy_filename
 
 
-# TODO work in progress: here we should call correlation functions from cuda_correlation.py
-def process_list(list):
-    n_filters = len(list)
-    print(n_filters)
+@timing
+def do_correlation(m_list, l_list):
+    assert(len(m_list)==len(l_list))
+    r_list = [cp.empty((2*l_list[i]+1, m_list[i].shape[0], m_list[i].shape[0]), dtype=np.float32) for i in range(len(m_list))]
+    cross_correlation(r_list, m_list, l_list)
+    return r_list
 
 
-
-def test_matmult(matrix_a=None, matrix_b=None):
+def test_matmult(matrix_a=None, matrix_b=None, opt=True):
     if not cuda.is_available():
         print("Cuda is not available on this machine.")
         exit()
@@ -50,30 +34,33 @@ def test_matmult(matrix_a=None, matrix_b=None):
     if not matrix_a or not matrix_b:
         rows = 63
         cols = 426000
-        matrix_a = np.random.rand(rows, cols).astype('f')
-        matrix_b = np.random.rand(cols, rows).astype('f')
-        # np.random.seed(240387)
+        np.random.seed(240387)
+        matrix_a = cp.random.rand(rows, cols).astype('f')
+        matrix_b = cp.random.rand(cols, rows).astype('f')
         # matrix_a = np.ones((rows,cols), dtype=np.float32)
         # matrix_b = np.ones((cols, rows), dtype=np.float32)
     else:
-        matrix_a = np.array(matrix_a)
-        matrix_b = np.array(matrix_b)
+        matrix_a = cp.array(matrix_a)
+        matrix_b = cp.array(matrix_b)
 
-    matrix_c = np.empty((matrix_a.shape[0], matrix_b.shape[1]), dtype=np.float32)
+    if not opt:
+        matrix_c = cp.empty((matrix_a.shape[0], matrix_b.shape[1]), dtype=np.float32)
+        args = (matrix_a, matrix_b, matrix_c)
+        tpb = (N_THREADS, N_THREADS)
+        n_blocks_x = (matrix_a.shape[0] + N_THREADS - 1) // N_THREADS
+        # n_blocks_y = (matrix_a.shape[1] + n_threads - 1) // n_threads
+        bpg = (n_blocks_x, n_blocks_x)
+        print(f"Running naive matrix multiplication (numba) with bpg={bpg} and tpb={tpb}")
+        run_numba_kernel(naive_matmul, bpg, tpb, *args)
+    else:
+        matrix_c = cp.matmul(matrix_a, matrix_b)
 
-    args = (matrix_a, matrix_b, matrix_c)
-    n_threads = 16
-    tpb = (n_threads, n_threads)
-    n_blocks_x = (matrix_a.shape[0] + n_threads - 1) // n_threads
-    # n_blocks_y = (matrix_a.shape[1] + n_threads - 1) // n_threads
-    bpg = (n_blocks_x, n_blocks_x)
-    print(f"Running matrix multiplication with bpg={bpg} and tpb={tpb}")
-    run_numba_kernel(naive_matmul, bpg, tpb, *args)
-    return matrix_c
+    return cp.asnumpy(matrix_c)
 
 
-def load_data(path, convert_csv=False):
-    matrix_lag_list = []
+def load_data_from_file(path, lags, convert_csv=False):
+    m_list = []
+    l_list = []
     if convert_csv:
         for file in glob.glob(path):
             file_extension = os.path.splitext(file)[1]
@@ -88,12 +75,53 @@ def load_data(path, convert_csv=False):
             def subfunc(m):
                 return m.group(1)+m.group(2) if len(m.group(2)) == 2 else m.group(1)+"0"+m.group(2)
             filename = re.sub(r'[a-z./]*([A-Za-z]+)([0-9]+)\.[a-z]+.', subfunc, file)
-            if DEBUG:
-                print(f"Array {file} has shape {np.shape(array)}")
-            matrix_lag_list.append((filename, array, LAGS[filename]))
-    return sorted(matrix_lag_list)
+            # print(f"Array {file} has shape {np.shape(array)}")
+            m_list.append(array)
+            l_list.append(lags[filename])
+    return m_list, l_list
+
+
+def test():
+    DEBUG = False
+
+    if DEBUG:
+        PATH_PATTERN = "./data/TS10*"
+    else:
+        PATH_PATTERN = "./data/*"
+
+    LAGS = {"TS01": 20,
+            "TS02": 20,
+            "TS03": 41,
+            "TS04": 60,
+            "TS05": 100,
+            "TS06": 120,
+            "TS07": 80,
+            "TS08": 50,
+            "TS09": 34,
+            "TS10": 25
+            }
+
+    data_list = load_data_from_file(PATH_PATTERN, LAGS)
+    ret = do_correlation(*data_list)
+    return [cp.asnumpy(r) for r in ret]
+
+
+def run(m_list, l_list):
+    m_list = [np.array(i) for i in m_list]
+    l_list = [int(i) for i in l_list]
+    if len(l_list) != len(m_list):
+        print("Data and lags have different sizes! Exiting...")
+        return
+    for i in range(len(m_list)):
+        if l_list[i] > m_list[i].shape[1]:
+            print(f"Invalid max lag value ({l_list[i]}) for filter {i}: "
+                  f"setting lag value to {m_list[i].shape[1] - 1}")
+            l_list[i] = m_list[i].shape[1] - 1
+
+    ret = do_correlation(m_list, l_list)
+    return [cp.asnumpy(r) for r in ret]
 
 
 if __name__ == "__main__":
-    matrix_lag_list = load_data(PATH_PATTERN)
-    process_list(matrix_lag_list)
+    res = test()
+    print(res)
