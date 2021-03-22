@@ -1,20 +1,18 @@
 % create some dummy test data
-n_filters = 3;
-n_neurons = 6;
-timestamps = 4;
+n_filters = 10;
+n_neurons = 63;
+timestamps = 400;
 m_list = cell(1,n_filters);
 for i = 1:n_filters
     m_list{i} = single(randn(n_neurons,timestamps));
-    l_list{i} = randi([1,max(n_neurons, timestamps)-1]);
+    l_list{i} = randi([1,timestamps-1]);
 end
 
-% import the python module
-% NOTE: the py file MUST be in the same directory as the .m file
-mod = py.importlib.import_module('run');
 % Call the "run" method that execute the crosscorrelation between a list of matrices (m_list)
 %        at a given lag, which can be different for each matrix (l_list)
-% Note that the lenght of the two lists must be the same, of course.
-ret = mod.run(m_list, l_list);
+% NOTE: the py file MUST be in the same directory as the .m file
+% NOTE: the length of the two lists must be the same, of course.
+ret = py.run.matlab_xcorr(m_list, l_list);
 
 % Convert the return values from python data to matlab data.
 % NOTE that no actual memory transfer should take place here... (need to check to be sure)
