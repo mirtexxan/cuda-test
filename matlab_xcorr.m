@@ -1,7 +1,7 @@
 % create some dummy test data
-filters = 3;
-n_neurons = 10;
-timestamps = 426;
+n_filters = 3;
+n_neurons = 6;
+timestamps = 4;
 m_list = cell(1,n_filters);
 for i = 1:n_filters
     m_list{i} = single(randn(n_neurons,timestamps));

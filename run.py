@@ -1,11 +1,9 @@
-from numba import cuda
 import numpy as np
 import glob
 import os
 import re
 import cupy as cp
 
-from legacy import run_numba_kernel, naive_matmul, N_THREADS
 from utils import timing
 from cuda_correlation import cross_correlation
 
@@ -26,10 +24,7 @@ def do_correlation(m_list, l_list):
     return r_list
 
 
-def test_matmult(matrix_a=None, matrix_b=None, opt=True):
-    if not cuda.is_available():
-        print("Cuda is not available on this machine.")
-        exit()
+def test_matmult(matrix_a=None, matrix_b=None):
 
     if not matrix_a or not matrix_b:
         rows = 63
@@ -43,22 +38,13 @@ def test_matmult(matrix_a=None, matrix_b=None, opt=True):
         matrix_a = cp.array(matrix_a)
         matrix_b = cp.array(matrix_b)
 
-    if not opt:
-        matrix_c = cp.empty((matrix_a.shape[0], matrix_b.shape[1]), dtype=np.float32)
-        args = (matrix_a, matrix_b, matrix_c)
-        tpb = (N_THREADS, N_THREADS)
-        n_blocks_x = (matrix_a.shape[0] + N_THREADS - 1) // N_THREADS
-        # n_blocks_y = (matrix_a.shape[1] + n_threads - 1) // n_threads
-        bpg = (n_blocks_x, n_blocks_x)
-        print(f"Running naive matrix multiplication (numba) with bpg={bpg} and tpb={tpb}")
-        run_numba_kernel(naive_matmul, bpg, tpb, *args)
-    else:
-        matrix_c = cp.matmul(matrix_a, matrix_b)
+    matrix_c = cp.matmul(matrix_a, matrix_b)
 
     return cp.asnumpy(matrix_c)
 
 
 def load_data_from_file(path, lags, convert_csv=False):
+
     m_list = []
     l_list = []
     if convert_csv:
